@@ -1,72 +1,119 @@
-const { EmbedBuilder } = require("discord.js");
-const config = require("../config.json");
+const { Events, PermissionFlagsBits } = require("discord.js");
+const fs = require("fs");
+const configPath = "./serverConfig.json";
 
 module.exports = {
-  name: "interactionCreate",
+  name: Events.InteractionCreate,
   async execute(interaction, client) {
-    if (interaction.isButton() && interaction.customId === "verify_button") {
-      await interaction.reply({
-        content: "Please type your desired nickname in this channel.",
-        ephemeral: true,
-      });
+    try {
+      console.log(
+        `🔹 Received interaction: ${
+          interaction.commandName || interaction.customId
+        }`
+      );
 
-      const filter = (msg) => msg.author.id === interaction.user.id;
-      const collector = interaction.channel.createMessageCollector({
-        filter,
-        time: 60000,
-        max: 1,
-      });
-
-      collector.on("collect", async (message) => {
-        const newNickname = message.content;
-        try {
-          // Notify admins about the new nickname request
-          const logChannel = interaction.guild.channels.cache.get(
-            config.logChannelId
+      if (interaction.isChatInputCommand()) {
+        const command = client.commands.get(interaction.commandName);
+        if (!command) {
+          console.error(
+            `❌ No command matching ${interaction.commandName} was found.`
           );
-          if (logChannel) {
-            const logEmbed = new EmbedBuilder()
-              .setColor("#FAA61A")
-              .setTitle("Nickname Verification Request")
-              .setDescription(
-                `**User:** ${interaction.user.tag} (${interaction.user.id})\n**Requested Nickname:** ${newNickname}`
-              )
-              .setTimestamp();
-            await logChannel.send({ embeds: [logEmbed] });
+          return;
+        }
+        await command.execute(interaction, client);
+      } else if (interaction.isButton()) {
+        console.log(`🔘 Button clicked: ${interaction.customId}`);
+
+        if (interaction.customId.startsWith("verify_")) {
+          const userId = interaction.customId.split("_")[1];
+
+          if (interaction.user.id !== userId) {
+            return await interaction.reply({
+              content: "❌ You are not allowed to click this button!",
+              ephemeral: true,
+            });
           }
 
-          await message.reply(
-            `✅ Your nickname request has been sent to the admins for verification.`
-          );
-        } catch (err) {
-          console.error("Error sending nickname request:", err);
-          await message.reply(
-            "⚠ I couldn't send your nickname request. Please try again later."
-          );
-        }
-      });
-
-      collector.on("end", (collected) => {
-        if (collected.size === 0) {
-          interaction.followUp({
+          await interaction.reply({
             content:
-              "❌ You didn't provide a nickname in time. Please try again.",
+              "✅ Your verification request has been sent to the admins!",
             ephemeral: true,
           });
+
+          await interaction.message
+            .delete()
+            .catch((err) => console.error("❌ Error deleting message:", err));
+
+          if (!fs.existsSync(configPath)) return;
+          const config = JSON.parse(fs.readFileSync(configPath));
+
+          const serverConfig = config[interaction.guild.id];
+          if (!serverConfig || !serverConfig.logChannelId) return;
+
+          const logChannel = interaction.guild.channels.cache.get(
+            serverConfig.logChannelId
+          );
+          if (!logChannel) return console.error("❌ Log channel not found.");
+
+          const embed = {
+            color: 0x5865f2,
+            title: "New Verification Request",
+            description: `**👤 User:** <@${interaction.user.id}> ( ${
+              interaction.user.id
+            } )\n📅 **Joined:** <t:${Math.floor(
+              interaction.member.joinedTimestamp / 1000
+            )}:R>`,
+            thumbnail: {
+              url: interaction.user.displayAvatarURL({ dynamic: true }),
+            },
+            footer: { text: "Approve or Deny the request manually" },
+          };
+
+          await logChannel.send({ embeds: [embed] });
+        } else if (interaction.customId.startsWith("approve_")) {
+          if (
+            !interaction.member.permissions.has(
+              PermissionFlagsBits.Administrator
+            )
+          ) {
+            return await interaction.reply({
+              content: "❌ You do not have permission to approve verification.",
+              ephemeral: true,
+            });
+          }
+
+          const userId = interaction.customId.split("_")[1];
+          const member = await interaction.guild.members.fetch(userId);
+
+          if (!fs.existsSync(configPath)) return;
+          const config = JSON.parse(fs.readFileSync(configPath));
+
+          const serverConfig = config[interaction.guild.id];
+          if (!serverConfig || !serverConfig.verifyRoleId) return;
+
+          const verifyRole = interaction.guild.roles.cache.get(
+            serverConfig.verifyRoleId
+          );
+          if (!verifyRole)
+            return console.error("❌ Verification role not found.");
+
+          await member.roles.add(verifyRole);
+          await interaction.reply({
+            content: `✅ <@${userId}> has been verified!`,
+            ephemeral: false,
+          });
         }
-      });
-    }
-
-    if (interaction.isCommand()) {
-      const command = client.commands.get(interaction.commandName);
-      if (!command) return;
-
-      try {
-        await command.execute(interaction);
-      } catch (error) {
-        console.error(error);
+      }
+    } catch (error) {
+      console.error("❌ Error handling interaction:", error);
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: "There was an error processing this interaction.",
+          ephemeral: true,
+        });
+      } else {
         await interaction.reply({
-          content: "There was an error while executing this command!",
+          content: "There was an error processing this interaction.",
           ephemeral: true,
         });
       }

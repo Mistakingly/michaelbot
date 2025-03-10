@@ -1,7 +1,6 @@
 const { Client, GatewayIntentBits, Collection } = require("discord.js");
 const fs = require("fs");
 const config = require("./config.json");
-require("dotenv").config();
 
 const client = new Client({
   intents: [
@@ -36,4 +35,4 @@ for (const file of eventFiles) {
   }
 }
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(config.token);
